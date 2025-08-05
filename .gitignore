@@ -7,14 +7,13 @@
 *.mp4
 
 # Backend (evo2-backend - Python/Modal)
-ai-podcast-clipper-backend/__pycache__/
-ai-podcast-clipper-backend/*.pyc
-ai-podcast-clipper-backend/*.pyo
-ai-podcast-clipper-backend/*.pyd
-ai-podcast-clipper-backend/.venv/
-ai-podcast-clipper-backend/venv/
-ai-podcast-clipper-backend/env/
-ai-podcast-clipper-backend/*.env
-ai-podcast-clipper-backend/.env
-ai-podcast-clipper-backend/.modal*
-ai-podcast-clipper-backend/brca1_analysis_plot.png
+snaPod-podcast-clipper-backend/__pycache__/
+snapPod-podcast-clipper-backend/*.pyc
+snapPod-podcast-clipper-backend/*.pyo
+snapPod-podcast-clipper-backend/*.pyd
+snapPod-podcast-clipper-backend/.venv/
+snapPod-podcast-clipper-backend/venv/
+snapPod-podcast-clipper-backend/env/
+snapPod-podcast-clipper-backend/*.env
+snapPod-podcast-clipper-backend/.env
+snapPod-podcast-clipper-backend/.modal*

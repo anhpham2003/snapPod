@@ -1,4 +1,4 @@
-🎙️ SnapPodAI Podcast Clipper
+# 🎙️ SnapPodAI Podcast Clipper
 
 Turn full-length podcasts into viral short-form content in minutes.  
 No editing skills needed — just upload and go.

@@ -3,11 +3,11 @@
 Turn full-length podcasts into viral short-form content in minutes.  
 No editing skills needed — just upload and go.
 
-## 🚀 Overview
+## 🚀 Overview 
 
-This is a full-stack AI-powered SaaS app that transforms podcasts into shareable short-form videos perfect for TikTok, YouTube Shorts, and Reels. It auto-identifies viral moments, crops to the active speaker’s face, and overlays subtitles — all with minimal user input.
+##### This is a full-stack AI-powered SaaS app that transforms podcasts into shareable short-form videos perfect for TikTok, YouTube Shorts, and Reels. It auto-identifies viral moments, crops to the active speaker’s face, and overlays subtitles — all with minimal user input.
 ---
-## ✨ Features
+##✨ Features
 
 - 🎬 **Auto-detects viral moments** (stories, Q&A, etc.)
 - 🧠 **LLM-powered moment detection** using Gemini 2.5 Pro

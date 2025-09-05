@@ -15,10 +15,11 @@ export const processVideo = inngest.createFunction(
   async ({ event, step }) => {
     const {uploadedFileId} = event.data;
 
-    const {userId, credits, s3_Key} = await step.run("check-credits", async () => {
+    try {
+      const {userId, credits, s3_Key} = await step.run("check-credits", async () => {
       const uploadedFile = await db.uploadedFile.findUniqueOrThrow({
         where: {
-          id: uploadedFileId
+          id: uploadedFileId,
         },
         select: {
           user: {
@@ -33,7 +34,7 @@ export const processVideo = inngest.createFunction(
       return {
         userId: uploadedFile.user.id, 
         credits: uploadedFile.user.credits,
-        s3_Key: uploadedFileId.s3Key,
+        s3_Key: uploadedFile.s3Key,
       };
     });
 
@@ -118,6 +119,16 @@ export const processVideo = inngest.createFunction(
         });
       });
     }
+    } catch (error) {
+      await db.uploadedFile.update({
+          where: {
+            id: uploadedFileId,
+          },
+          data: {
+            status: "failed",
+          },
+        });
+    }
   },
 );
 
@@ -125,7 +136,7 @@ async function listS3ObjectsByPrefix(prefix: string) {
   const s3Client = new S3Client({
     region: env.AWS_REGION,
     credentials: {
-    accessKeyId: env.AWS_ACCCESS_KEY_ID,
+    accessKeyId: env.AWS_ACCESS_KEY_ID,
     secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
     },
   });
@@ -136,5 +147,5 @@ async function listS3ObjectsByPrefix(prefix: string) {
   });
 
   const response = await s3Client.send(listCommand)
-  return response.Contents?.map((item) => item.Key).filter(Boolean) || [];
+  return response.Contents?.map((item) => item.Key).filter(Boolean) ?? [];
 }

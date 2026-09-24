@@ -1,13 +1,14 @@
 import modal
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import os
 import uuid
 import boto3
 import pathlib
 import whisperx
 import subprocess
+import sys
 import time
 import json
 from google import genai
@@ -19,9 +20,48 @@ from tqdm import tqdm
 import cv2
 import ffmpegcv
 import pysubs2
+from urllib import request as urllib_request
+from pipeline_contracts import validate_moments
 
 class ProcessVideoRequest(BaseModel):
     s3_key: str
+    project_id: str
+    processing_version: int
+    progress_callback_url: str
+    requested_clip_count: int = Field(default=3, ge=1, le=5)
+
+def report_progress(job: ProcessVideoRequest, stage: str, percent: int,
+                    processed: int = 0, requested: int = 0):
+    payload = json.dumps({
+        "projectId": job.project_id,
+        "processingVersion": job.processing_version,
+        "stage": stage,
+        "progressPercent": min(percent, 99),
+        "processedClipCount": processed,
+        "requestedClipCount": requested,
+    }).encode("utf-8")
+    progress_request = urllib_request.Request(
+        job.progress_callback_url,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {os.environ['AUTH_TOKEN']}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(progress_request, timeout=10) as response:
+            if response.status >= 300:
+                print(f"Progress callback returned status {response.status}")
+    except Exception as callback_error:
+        # Progress reporting should never discard otherwise usable video output.
+        print(f"Progress callback failed: {callback_error}")
+
+def s3_bucket_name():
+    value = os.environ.get("S3_BUCKET_NAME")
+    if not value:
+        raise RuntimeError("S3_BUCKET_NAME is not configured")
+    return value
 
 # don't change these layers unless have to
 image = (modal.Image.from_registry(
@@ -30,7 +70,9 @@ image = (modal.Image.from_registry(
     .pip_install_from_requirements('requirements.txt')
     .run_commands(["mkdir -p /usr/share/fonts/truetype/custom",
                    "wget -O /usr/share/fonts/truetype/custom/Anton-Regular.ttf https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf",
-                   "fc-cache -f -v"]).add_local_dir("asd", "/asd", copy=True))
+                   "fc-cache -f -v"])
+    .add_local_dir("asd", "/asd", copy=True)
+    .add_local_python_source("pipeline_contracts"))
 
 app = modal.App('ai-podcast-clipper', image=image)
 
@@ -122,10 +164,11 @@ def create_vertical_video(tracks, scores, pyframes_path, pyavi_path, audio_path,
     if vout:
         vout.release()
     
-    ffmpeg_command = (f"ffmpeg -i {tempt_video_path} -i {audio_path} "
-                      f"-c:v h264 -preset fast -crf 23 -c:a aac -b:a 128k "
-                      f"{output_path}")
-    subprocess.run(ffmpeg_command, shell=True, check=True, text=True)
+    subprocess.run([
+        "ffmpeg", "-y", "-i", str(tempt_video_path), "-i", str(audio_path),
+        "-c:v", "h264", "-preset", "fast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k", str(output_path),
+    ], check=True, capture_output=True, text=True, timeout=600)
 
 def create_subtitles_with_ffmpeg(transcript_segments: list, clip_start: float, clip_end: float, clip_video_path: str, output_path: str, max_words: int = 5):
     temp_dir = os.path.dirname(output_path)
@@ -201,14 +244,18 @@ def create_subtitles_with_ffmpeg(transcript_segments: list, clip_start: float, c
 
     subs.save(subtitle_path)
 
-    ffmpeg_cmd = (f"ffmpeg -y -i {clip_video_path} -vf \"ass={subtitle_path}\" "
-                    f"-c:v h264 -preset fast -crf 23 {output_path}")
-    subprocess.run(ffmpeg_cmd, shell=True, check=True)
+    subprocess.run([
+        "ffmpeg", "-y", "-i", str(clip_video_path),
+        "-vf", f"ass={subtitle_path}", "-c:v", "h264",
+        "-preset", "fast", "-crf", "23", str(output_path),
+    ], check=True, capture_output=True, text=True, timeout=600)
 
-def process_clip(base_dir: str, original_vid_path: str, s3_key: str, start_time: float, end_time: float, clip_index: int, transcript_segments: list):
+def render_clip(base_dir: str, original_vid_path: str, s3_key: str, start_time: float, end_time: float, clip_index: int):
     clip_name = f"clip_{clip_index}"
-    s3_key_dir = os.path.dirname(s3_key)
-    output_s3_key = f"{s3_key_dir}/{clip_name}.mp4"
+    if "/source/" not in s3_key:
+        raise ValueError("Source key is not scoped to a project")
+    project_prefix = s3_key.split("/source/", 1)[0]
+    output_s3_key = f"{project_prefix}/renders/{clip_name}.mp4"
     print(f"Output S3 key: {output_s3_key}")
 
     clip_dir = base_dir / clip_name
@@ -227,21 +274,24 @@ def process_clip(base_dir: str, original_vid_path: str, s3_key: str, start_time:
     pyavi_path.mkdir(exist_ok=True)
 
     duration = end_time - start_time
-    cut_command = (f"ffmpeg -i {original_vid_path} -ss {start_time} -t {duration} "
-                   f"{clip_segment_path}")
-    subprocess.run(cut_command, shell=True, check=True, capture_output=True, text=True)
+    subprocess.run([
+        "ffmpeg", "-y", "-i", str(original_vid_path), "-ss", str(start_time),
+        "-t", str(duration), str(clip_segment_path),
+    ], check=True, capture_output=True, text=True, timeout=300)
 
-    extract_audio_command = f"ffmpeg -i {clip_segment_path} -vn -acodec pcm_s16le -ar 16000 -ac 1 {audio_path}"
-    subprocess.run(extract_audio_command, shell=True, check=True, capture_output=True, text=True)
+    subprocess.run([
+        "ffmpeg", "-y", "-i", str(clip_segment_path), "-vn",
+        "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", str(audio_path),
+    ], check=True, capture_output=True, text=True, timeout=300)
 
     shutil.copy(clip_segment_path, base_dir / f"{clip_name}.mp4")
 
-    columbia_command = (f"python Columbia_test.py --videoName {clip_name} "
-                        f"--videoFolder {str(base_dir)} "
-                        f"--pretrainModel weight/finetuning_TalkSet.model")
-    
     columbia_start_time = time.time()
-    subprocess.run(columbia_command, cwd="/asd", shell=True)
+    subprocess.run([
+        sys.executable, "Columbia_test.py", "--videoName", clip_name,
+        "--videoFolder", str(base_dir),
+        "--pretrainModel", "weight/finetuning_TalkSet.model",
+    ], cwd="/asd", check=True, capture_output=True, text=True, timeout=600)
     columbia_end_time = time.time()
     print(f"Columbia script completed in {columbia_end_time - columbia_start_time:.2f} seconds")
 
@@ -264,12 +314,32 @@ def process_clip(base_dir: str, original_vid_path: str, s3_key: str, start_time:
     cvv_end_time = time.time()
     print(f"Clip {clip_index} vertical video creation time: {cvv_end_time - cvv_start_time:.2f} seconds")
 
-    create_subtitles_with_ffmpeg(transcript_segments, start_time, end_time, vertical_mp4_path, subtitle_output_path, max_words=5)
+    return {
+        "start_time": start_time,
+        "end_time": end_time,
+        "vertical_path": vertical_mp4_path,
+        "subtitle_path": subtitle_output_path,
+        "output_s3_key": output_s3_key,
+    }
 
+def caption_and_upload(rendered_clip: dict, transcript_segments: list):
+    create_subtitles_with_ffmpeg(
+        transcript_segments,
+        rendered_clip["start_time"],
+        rendered_clip["end_time"],
+        rendered_clip["vertical_path"],
+        rendered_clip["subtitle_path"],
+        max_words=5,
+    )
     s3_client = boto3.client("s3")
-    s3_client.upload_file(subtitle_output_path, "ai-podcast-clipper07", output_s3_key)
+    s3_client.upload_file(
+        rendered_clip["subtitle_path"],
+        s3_bucket_name(),
+        rendered_clip["output_s3_key"],
+    )
+    return rendered_clip["output_s3_key"]
 
-@app.cls(gpu="L40S", timeout=900, retries=0, scaledown_window=20, secrets=[modal.Secret.from_name('ai-podcast-clipper-secret')], volumes={mount_path: volume})
+@app.cls(gpu="T4", timeout=3600, retries=0, scaledown_window=20, secrets=[modal.Secret.from_name('ai-podcast-clipper-secret')], volumes={mount_path: volume})
 class AIPodcastClipper:
     @modal.enter()
     def load_model(self):
@@ -285,13 +355,16 @@ class AIPodcastClipper:
         print("Created gemini client")
     def transcribe_video(self, base_dir: str, video_path: str) -> str:
         audio_path = base_dir / "audio.wav"
-        extract_cmd = f"ffmpeg -i {video_path} -vn -acodec pcm_s16le -ar 16000 -ac 1 {audio_path}"
-        subprocess.run(extract_cmd, shell=True, check=True, capture_output=True)
+        subprocess.run([
+            "ffmpeg", "-y", "-i", str(video_path), "-vn",
+            "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", str(audio_path),
+        ], check=True, capture_output=True, timeout=600)
 
         print('Starting transcription with WhisperX..')
         start_time = time.time()
         audio = whisperx.load_audio(str(audio_path))
-        result = self.whisperx_model.transcribe(audio, batch_size=16)
+        # Keep the Phase 1 test deployment within the T4's smaller VRAM budget.
+        result = self.whisperx_model.transcribe(audio, batch_size=8)
 
         result = whisperx.align(
             result['segments'],
@@ -316,8 +389,8 @@ class AIPodcastClipper:
         return json.dumps(segments)
 
 
-    def identify_moments(self, transcript: dict):
-        response = self.gemini_client.models.generate_content(model='gemini-2.5-flash', contents = """
+    def identify_moments(self, transcript: list, candidate_count: int):
+        response = self.gemini_client.models.generate_content(model='gemini-2.5-flash', contents = f"""
     This is a podcast video transcript consisting of word, along with each word's start and end time. I am looking to create clips between a minimum of 30 and maximum of 60 seconds long. The clip should never exceed 60 seconds.
 
     Your task is to find and extract stories, or question and their corresponding answers from the transcript.
@@ -330,6 +403,7 @@ class AIPodcastClipper:
     - Only use the start and end timestamps provided in the input. modifying timestamps is not allowed.
     - Format the output as a list of JSON objects, each representing a clip with 'start' and 'end' timestamps: [{"start": seconds, "end": seconds}, ...clip2, clip3]. The output should always be readable by the python json.loads function.
     - Aim to generate longer clips between 40-60 seconds, and ensure to include as much content from the context as viable.
+    - Return at most {candidate_count} candidates, ordered from strongest to weakest.
 
     Avoid including:
     - Moments of greeting, thanking, or saying goodbye.
@@ -348,46 +422,84 @@ class AIPodcastClipper:
         if token.credentials != os.environ["AUTH_TOKEN"]:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect bearer token",
                                 headers={"WWW-Authenticate": "Bearer"})
+        if f"/projects/{request.project_id}/source/" not in s3_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Source key does not match the project",
+            )
         run_id = str(uuid.uuid4())
         base_dir = pathlib.Path("/tmp") / run_id
         base_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            report_progress(request, "PREPARING_VIDEO", 7)
+            video_path = base_dir / "input.mp4"
+            boto3.client("s3").download_file(s3_bucket_name(), s3_key, str(video_path))
 
-        #Download video file
-        video_path = base_dir / "input.mp4"
-        s3_client = boto3.client("s3")
-        s3_client.download_file("ai-podcast-clipper07", s3_key, str(video_path))
+            report_progress(request, "TRANSCRIBING", 15)
+            transcript_segments = json.loads(self.transcribe_video(base_dir, video_path))
 
-        # 1. Trascription
-        transcript_segment_json = self.transcribe_video(base_dir, video_path)
-        transcipt_segments = json.loads(transcript_segment_json)
+            report_progress(request, "IDENTIFYING_MOMENTS", 45)
+            candidate_count = min(request.requested_clip_count * 2, 10)
+            identified_raw = self.identify_moments(transcript_segments, candidate_count)
+            cleaned = identified_raw.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned[len("```json"):].strip()
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-len("```")].strip()
+            try:
+                moments = json.loads(cleaned)
+            except json.JSONDecodeError as model_error:
+                raise RuntimeError("Gemini returned invalid moment data") from model_error
+            selected_moments = validate_moments(
+                moments, transcript_segments, request.requested_clip_count
+            )
 
-        # 2. Identify moments for clips
-        print('Identifying clip moments')
-        identified_moments_raw = self.identify_moments(transcipt_segments)
+            rendered_clips = []
+            successful_keys = []
+            failed_clip_count = 0
+            selected_count = len(selected_moments)
+            report_progress(request, "CREATING_CLIPS", 60, 0, selected_count)
+            for index, moment in enumerate(selected_moments):
+                try:
+                    rendered_clips.append(render_clip(
+                        base_dir, video_path, s3_key, moment["start"], moment["end"], index
+                    ))
+                except Exception as clip_error:
+                    failed_clip_count += 1
+                    print(f"Clip {index} render failed: {clip_error}")
+                completed = len(rendered_clips) + failed_clip_count
+                report_progress(
+                    request, "CREATING_CLIPS",
+                    60 + int((completed / max(selected_count, 1)) * 25),
+                    len(rendered_clips), selected_count
+                )
 
-        cleaned_json_string = identified_moments_raw.strip()
-        if cleaned_json_string.startswith("```json"):
-            cleaned_json_string = cleaned_json_string[len("```json"):].strip()
-        if cleaned_json_string.endswith("```"):
-            cleaned_json_string = cleaned_json_string[:-len("```")].strip()
+            report_progress(request, "ADDING_CAPTIONS", 85, 0, selected_count)
+            for rendered_clip in rendered_clips:
+                try:
+                    successful_keys.append(caption_and_upload(rendered_clip, transcript_segments))
+                except Exception as clip_error:
+                    failed_clip_count += 1
+                    print(f"Clip caption/upload failed: {clip_error}")
+                completed = len(successful_keys) + failed_clip_count
+                report_progress(
+                    request, "ADDING_CAPTIONS",
+                    85 + int((completed / max(selected_count, 1)) * 10),
+                    len(successful_keys), selected_count
+                )
 
-        clip_moments = json.loads(cleaned_json_string)
-        if not clip_moments or not isinstance(clip_moments, list):
-            print("Error: Identified moments is not a list")
-            clip_moments = []
-        
-        print(clip_moments)
-
-        # 3. Process clips
-        for index, moment in enumerate(clip_moments[:1]):
-            if "start" in moment and "end" in moment:
-                print('Processing clip' + str(index) + " from " 
-                      + str(moment['start']) + " to " + str(moment['end']))
-                process_clip(base_dir, video_path, s3_key, moment['start'], moment['end'], index, transcipt_segments)
-
-        if base_dir.exists():
-            print(f"Cleaning up temp dir after {base_dir}")
-            shutil.rmtree(base_dir, ignore_errors=True)
+            report_progress(request, "FINALIZING", 95, len(successful_keys), selected_count)
+            return {
+                "requested_clip_count": request.requested_clip_count,
+                "candidates_found": len(moments) if isinstance(moments, list) else 0,
+                "valid_candidate_count": selected_count,
+                "successful_keys": successful_keys,
+                "failed_clip_count": failed_clip_count,
+            }
+        finally:
+            if base_dir.exists():
+                print(f"Cleaning up temp dir after {base_dir}")
+                shutil.rmtree(base_dir, ignore_errors=True)
 
 
 @app.local_entrypoint()
@@ -399,12 +511,16 @@ def main():
     url = ai_podcast_clipper.process_video.web_url
 
     payload = {
-        "s3_key": "test2/mi630min.mp4"
+        "s3_key": "users/test/projects/test/source/original.mp4",
+        "project_id": "test",
+        "processing_version": 1,
+        "progress_callback_url": "http://localhost:3000/api/processing-progress",
+        "requested_clip_count": 3,
     }
 
     headers = {
         "Content-Type": "application/json",
-        "Authorization": "Bearer 04062003"
+        "Authorization": f"Bearer {os.environ['AUTH_TOKEN']}"
     }
 
     response = requests.post(url, json=payload, headers=headers)

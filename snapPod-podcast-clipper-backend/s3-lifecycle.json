@@ -1,0 +1,27 @@
+{
+  "Rules": [
+    {
+      "ID": "DeleteTemporaryProcessingFiles",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "temporary/"
+      },
+      "Expiration": {
+        "Days": 1
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      }
+    },
+    {
+      "ID": "DeleteOriginalSources",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "sources/"
+      },
+      "Expiration": {
+        "Days": 14
+      }
+    }
+  ]
+}

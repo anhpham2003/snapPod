@@ -1,19 +1,12 @@
-# macOS
 .DS_Store
-.AppleDouble
-.LSOverride
-
-# Thumbnails
-*.mp4
-
-# Backend (evo2-backend - Python/Modal)
-snaPod-podcast-clipper-backend/__pycache__/
-snapPod-podcast-clipper-backend/*.pyc
-snapPod-podcast-clipper-backend/*.pyo
-snapPod-podcast-clipper-backend/*.pyd
-snapPod-podcast-clipper-backend/.venv/
-snapPod-podcast-clipper-backend/venv/
-snapPod-podcast-clipper-backend/env/
-snapPod-podcast-clipper-backend/*.env
-snapPod-podcast-clipper-backend/.env
-snapPod-podcast-clipper-backend/.modal*
+aws_access_key.csv
+tmp/
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/node_modules/
+**/.next/
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+!**/.env.example

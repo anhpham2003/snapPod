@@ -1,6 +1,9 @@
 .DS_Store
 aws_access_key.csv
 tmp/
+*.mp4
+*.mov
+*.mkv
 **/__pycache__/
 **/*.pyc
 **/.venv/

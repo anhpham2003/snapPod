@@ -44,7 +44,8 @@ next-env.d.ts
 # do not commit any .env files to git, except for the .env.example file. https://create.t3.gg/en/usage/env-variables#using-environment-variables
 .env
 .env*.local
-env*.js
+env*.local.js
+!src/env.js
 
 
 # vercel
@@ -75,3 +76,4 @@ ai-podcast-clipper-backend/*.env
 ai-podcast-clipper-backend/.env
 ai-podcast-clipper-backend/.modal*
 ai-podcast-clipper-backend/brca1_analysis_plot.png
+.env*

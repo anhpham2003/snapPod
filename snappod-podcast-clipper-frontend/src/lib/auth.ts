@@ -1,12 +1,12 @@
-import {hash, compare} from "bcryptjs";
+import { hash, compare } from "bcryptjs";
 
 export async function hashPassword(password: string) {
-    return hash(password, 12);
+  return hash(password, 12);
 }
 
 export async function comparePasswords(
-    plainPassword: string, 
-    hashedPassword: string
+  plainPassword: string,
+  hashedPassword: string,
 ) {
-    return compare(plainPassword, hashedPassword);
+  return compare(plainPassword, hashedPassword);
 }

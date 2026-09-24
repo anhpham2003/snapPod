@@ -11,16 +11,11 @@ import {
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Button } from "./ui/button";
-import { z } from "zod";
-import { useForm } from "react-hook-form"
-import { zodResolver } from "@hookform/resolvers/zod"
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
 import Link from "next/link";
-import {loginSchema,
-        signupSchema, 
-        type LoginFormValues,
-        type SignupFormValues } from "~/schemas/auth";
-import { signUp } from "~/actions/auth";
+import { loginSchema, type LoginFormValues } from "~/schemas/auth";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
@@ -33,34 +28,34 @@ export function LoginForm({
   const router = useRouter();
 
   const {
-    register, 
+    register,
     handleSubmit,
     formState: { errors },
-   } = useForm<LoginFormValues>({ resolver: zodResolver(loginSchema) });
-  
+  } = useForm<LoginFormValues>({ resolver: zodResolver(loginSchema) });
+
   const onSubmit = async (data: LoginFormValues) => {
     try {
       setIsSubmitting(true);
       setError(null);
 
       const signInResult = await signIn("credentials", {
-        email: data.email, 
-        password: data.password, 
+        email: data.email,
+        password: data.password,
         redirect: false,
       });
 
       if (signInResult?.error) {
-        setError("Invalid email or password.",);
+        setError("Invalid email or password.");
       } else {
         router.push("/dashboard");
       }
-    } catch (error) {
-      setError("An unexpected error occured")
+    } catch {
+      setError("An unexpected error occurred");
     } finally {
       setIsSubmitting(false);
     }
   };
-  
+
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       <Card>
@@ -83,36 +78,43 @@ export function LoginForm({
                   {...register("email")}
                 />
                 {errors.email && (
-                  <p className="text-sm text-red-500">
-                    {errors.email.message}
-                    </p>
+                  <p className="text-sm text-red-500">{errors.email.message}</p>
                 )}
               </div>
               <div className="grid gap-3">
                 <div className="flex items-center">
                   <Label htmlFor="password">Password</Label>
                 </div>
-                <Input id="password" type="password" required {...register("password")}/>
-              {errors.password && (
+                <Input
+                  id="password"
+                  type="password"
+                  required
+                  {...register("password")}
+                />
+                {errors.password && (
                   <p className="text-sm text-red-500">
                     {errors.password.message}
-                    </p>
-                )}  
+                  </p>
+                )}
               </div>
               {error && (
-                  <p className="rounded-md bg-red-50 p-3 text-sm text-red-500">
-                    {error}
-                    </p>
-                )}
+                <p className="rounded-md bg-red-50 p-3 text-sm text-red-500">
+                  {error}
+                </p>
+              )}
               <div className="flex flex-col gap-3">
-                <Button type="submit" className="w-full" disabled={isSubmitting}>
-                  {isSubmitting ? "Signing up..." : "Sign Up"}
+                <Button
+                  type="submit"
+                  className="w-full"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? "Signing in..." : "Sign in"}
                 </Button>
               </div>
             </div>
             <div className="mt-4 text-center text-sm">
-              Don't have an account?{" "}
-               <Link href="/signup" className="underline underline-offset-4">
+              Don&apos;t have an account?{" "}
+              <Link href="/signup" className="underline underline-offset-4">
                 Sign up
               </Link>
             </div>
@@ -120,5 +122,5 @@ export function LoginForm({
         </CardContent>
       </Card>
     </div>
-  )
+  );
 }

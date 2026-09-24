@@ -65,8 +65,9 @@ model User {
   sessions         Session[]
   posts            Post[]
 
-  uploadedFiles UploadedFile[]
-  clips         Clip[]
+  uploadedFiles  UploadedFile[]
+  clips          Clip[]
+  processingJobs ProcessingJob[]
 }
 
 enum ProjectStatus {
@@ -86,6 +87,16 @@ enum ProcessingStage {
   FINALIZING
 }
 
+enum ProcessingJobStatus {
+  QUEUED
+  DISPATCHED
+  PROCESSING
+  FINALIZING
+  COMPLETED
+  PARTIALLY_COMPLETED
+  FAILED
+}
+
 model UploadedFile {
   id                 String           @id @default(cuid())
   s3Key              String
@@ -102,12 +113,45 @@ model UploadedFile {
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 
-  clips Clip[]
+  clips          Clip[]
+  processingJobs ProcessingJob[]
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String
 
   @@index([s3Key])
+  @@index([userId, status])
+}
+
+model ProcessingJob {
+  id                  String              @id @default(cuid())
+  status              ProcessingJobStatus @default(QUEUED)
+  processingStage     ProcessingStage?
+  progressPercent     Int                 @default(0)
+  requestedClipCount  Int
+  processedClipCount  Int                 @default(0)
+  reservedCredits     Int
+  processingVersion   Int
+  externalJobId       String?
+  candidatesFound     Int?
+  validCandidateCount Int?
+  failedClipCount     Int?
+  errorCode           String?
+  errorMessage        String?
+  startedAt           DateTime?
+  heartbeatAt         DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  uploadedFile   UploadedFile @relation(fields: [uploadedFileId], references: [id], onDelete: Cascade)
+  uploadedFileId String
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  @@unique([uploadedFileId, processingVersion])
+  @@index([status, createdAt])
   @@index([userId, status])
 }
 

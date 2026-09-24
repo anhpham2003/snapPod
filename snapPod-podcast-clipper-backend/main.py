@@ -125,6 +125,9 @@ app = modal.App('ai-podcast-clipper', image=image)
 volume = modal.Volume.from_name(
     "ai-podcast-clipper-model-cache", create_if_missing=True
 )
+job_registry = modal.Dict.from_name(
+    "snappod-processing-jobs", create_if_missing=True
+)
 mount_path = "/root/.cache/torch"
 
 auth_scheme = HTTPBearer()
@@ -496,7 +499,9 @@ class AIPodcastClipper:
             successful_keys = []
             failed_clip_count = 0
             selected_count = len(selected_moments)
-            report_progress(request, "CREATING_CLIPS", 60, 0, selected_count)
+            report_progress(
+                request, "CREATING_CLIPS", 60, 0, request.requested_clip_count
+            )
             for index, moment in enumerate(selected_moments):
                 try:
                     rendered_clips.append(render_clip(
@@ -509,10 +514,12 @@ class AIPodcastClipper:
                 report_progress(
                     request, "CREATING_CLIPS",
                     60 + int((completed / max(selected_count, 1)) * 25),
-                    len(rendered_clips), selected_count
+                    len(rendered_clips), request.requested_clip_count
                 )
 
-            report_progress(request, "ADDING_CAPTIONS", 85, 0, selected_count)
+            report_progress(
+                request, "ADDING_CAPTIONS", 85, 0, request.requested_clip_count
+            )
             for rendered_clip in rendered_clips:
                 try:
                     successful_keys.append(caption_and_upload(rendered_clip, transcript_segments))
@@ -523,10 +530,16 @@ class AIPodcastClipper:
                 report_progress(
                     request, "ADDING_CAPTIONS",
                     85 + int((completed / max(selected_count, 1)) * 10),
-                    len(successful_keys), selected_count
+                    len(successful_keys), request.requested_clip_count
                 )
 
-            report_progress(request, "FINALIZING", 95, len(successful_keys), selected_count)
+            report_progress(
+                request,
+                "FINALIZING",
+                95,
+                len(successful_keys),
+                request.requested_clip_count,
+            )
             result = {
                 "requested_clip_count": request.requested_clip_count,
                 "candidates_found": len(moments) if isinstance(moments, list) else 0,
@@ -572,7 +585,15 @@ def enqueue_video(
             detail="Source key does not match the project",
         )
 
+    existing_job_id = job_registry.get(request.job_id)
+    if existing_job_id:
+        return {
+            "accepted": True,
+            "external_job_id": existing_job_id,
+        }
+
     function_call = AIPodcastClipper().process_video.spawn(request.model_dump())
+    job_registry[request.job_id] = function_call.object_id
     return {
         "accepted": True,
         "external_job_id": function_call.object_id,

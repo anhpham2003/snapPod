@@ -8,7 +8,6 @@ SnapPod turns long-form podcasts and interviews into captioned, vertical short v
 2. Run `npm ci`.
 3. Create a PostgreSQL database and run `npm run db:migrate`.
 4. Run `npm run dev`.
-5. Run the Inngest development server separately with `npm run inngest-dev`.
 
 ## Required environment variables
 
@@ -21,22 +20,21 @@ SnapPod turns long-form podcasts and interviews into captioned, vertical short v
 - `PROCESS_VIDEO_ENDPOINT`
 - `PROCESS_VIDEO_ENDPOINT_AUTH`
 - `PROCESSING_PROGRESS_CALLBACK_URL`
-- `INNGEST_EVENT_KEY` (production)
-- `INNGEST_SIGNING_KEY` (production)
+- `PROCESSING_COMPLETION_CALLBACK_URL`
 
 `PROCESS_VIDEO_ENDPOINT_AUTH` must match the Modal `AUTH_TOKEN`. The progress
 callback uses the same shared secret. In production,
 `PROCESSING_PROGRESS_CALLBACK_URL` is your Vercel application URL followed by
-`/api/processing-progress`.
+`/api/processing-progress`, and `PROCESSING_COMPLETION_CALLBACK_URL` ends with
+`/api/processing-completion`.
 
 ## Deployment
 
-1. Deploy the Modal worker and record its endpoint.
+1. Deploy the Modal worker and record the asynchronous enqueue endpoint.
 2. Provision managed PostgreSQL and apply `npm run db:migrate`.
 3. Add every variable from `.env.example` to the Vercel project.
 4. Deploy this directory to Vercel.
-5. Sync the deployed `/api/inngest` endpoint in Inngest.
-6. Allow the deployed frontend origin in the S3 CORS policy.
+5. Allow the deployed frontend origin in the S3 CORS policy.
 
 ## Validation
 

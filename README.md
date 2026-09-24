@@ -18,7 +18,7 @@ No editing skills needed — just upload and go.
 - 💳 **Credit system** with Stripe for purchasing clip credits
 - 👤 **User authentication** via Auth.js
 - 📊 **Dashboard** for uploads, previews, and clip management
-- ⚙️ **Queue handling** with Inngest
+- ⚙️ **Durable asynchronous jobs** with PostgreSQL and Modal
 - 🌐 **FastAPI** endpoint for podcast processing
 - 🖼️ **Modern UI** using Tailwind CSS + Shadcn
 ---
@@ -26,9 +26,9 @@ No editing skills needed — just upload and go.
 
 | Layer        | Tools / Frameworks                                 |
 |-------------|-----------------------------------------------------|
-| Frontend     | Next.js 15, React, TypeScript, Tailwind CSS, ShadCN |
+| Frontend     | Next.js 16, React, TypeScript, Tailwind CSS, ShadCN |
 | Backend      | FastAPI, Python, WhisperX, LR-ASD, Gemini 2.5 Pro  |
-| Infrastructure | Modal, AWS S3, Inngest, Stripe, Auth.js             |
+| Infrastructure | Modal, PostgreSQL, AWS S3, Vercel, Auth.js          |
 | Media/Rendering | FFMPEGCV (GPU), Gemini 2.5 Pro                    |
 ---
 ## 🛠 Setup

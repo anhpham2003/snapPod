@@ -1,5 +1,6 @@
 .DS_Store
 aws_access_key.csv
+*_accessKeys.csv
 tmp/
 *.mp4
 *.mov

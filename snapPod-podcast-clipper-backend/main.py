@@ -5,24 +5,39 @@ from pydantic import BaseModel, Field
 import os
 import uuid
 import hmac
-import boto3
 import pathlib
-import whisperx
 import subprocess
 import sys
 import time
 import json
-from google import genai
 import shutil
 import pickle
 import glob
-import numpy as np
-from tqdm import tqdm
-import cv2
-import ffmpegcv
-import pysubs2
 from urllib import request as urllib_request
 from pipeline_contracts import validate_moments
+
+# Define the remote image before importing dependencies that only exist inside
+# it. This keeps `modal deploy` lightweight and avoids requiring the GPU/media
+# stack on the developer machine.
+image = (modal.Image.from_registry(
+    "nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.12")
+    .apt_install(["ffmpeg", "libgl1-mesa-glx", "wget", "libcudnn8", "libcudnn8-dev"])
+    .pip_install_from_requirements('requirements.txt')
+    .run_commands(["mkdir -p /usr/share/fonts/truetype/custom",
+                   "wget -O /usr/share/fonts/truetype/custom/Anton-Regular.ttf https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf",
+                   "fc-cache -f -v"])
+    .add_local_dir("asd", "/asd", copy=True)
+    .add_local_python_source("pipeline_contracts"))
+
+with image.imports():
+    import boto3
+    import whisperx
+    from google import genai
+    import numpy as np
+    from tqdm import tqdm
+    import cv2
+    import ffmpegcv
+    import pysubs2
 
 class ProcessVideoRequest(BaseModel):
     s3_key: str
@@ -108,17 +123,6 @@ def s3_bucket_name():
     if not value:
         raise RuntimeError("S3_BUCKET_NAME is not configured")
     return value
-
-# don't change these layers unless have to
-image = (modal.Image.from_registry(
-    "nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.12")
-    .apt_install(["ffmpeg", "libgl1-mesa-glx", "wget", "libcudnn8", "libcudnn8-dev"])
-    .pip_install_from_requirements('requirements.txt')
-    .run_commands(["mkdir -p /usr/share/fonts/truetype/custom",
-                   "wget -O /usr/share/fonts/truetype/custom/Anton-Regular.ttf https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf",
-                   "fc-cache -f -v"])
-    .add_local_dir("asd", "/asd", copy=True)
-    .add_local_python_source("pipeline_contracts"))
 
 app = modal.App('ai-podcast-clipper', image=image)
 

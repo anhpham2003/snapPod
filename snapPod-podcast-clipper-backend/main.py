@@ -4,6 +4,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 import os
 import uuid
+import hmac
 import boto3
 import pathlib
 import whisperx
@@ -26,14 +27,27 @@ from pipeline_contracts import validate_moments
 class ProcessVideoRequest(BaseModel):
     s3_key: str
     project_id: str
+    job_id: str
     processing_version: int
     progress_callback_url: str
+    completion_callback_url: str
     requested_clip_count: int = Field(default=3, ge=1, le=5)
+
+
+def authorize_request(token: HTTPAuthorizationCredentials):
+    expected = os.environ["AUTH_TOKEN"]
+    if not hmac.compare_digest(token.credentials, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 def report_progress(job: ProcessVideoRequest, stage: str, percent: int,
                     processed: int = 0, requested: int = 0):
     payload = json.dumps({
         "projectId": job.project_id,
+        "jobId": job.job_id,
         "processingVersion": job.processing_version,
         "stage": stage,
         "progressPercent": min(percent, 99),
@@ -56,6 +70,38 @@ def report_progress(job: ProcessVideoRequest, stage: str, percent: int,
     except Exception as callback_error:
         # Progress reporting should never discard otherwise usable video output.
         print(f"Progress callback failed: {callback_error}")
+
+
+def report_completion(job: ProcessVideoRequest, result: dict):
+    payload = json.dumps({
+        "projectId": job.project_id,
+        "jobId": job.job_id,
+        "processingVersion": job.processing_version,
+        **result,
+    }).encode("utf-8")
+    last_error = None
+    for attempt in range(3):
+        completion_request = urllib_request.Request(
+            job.completion_callback_url,
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {os.environ['AUTH_TOKEN']}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib_request.urlopen(completion_request, timeout=30) as response:
+                if response.status >= 300:
+                    raise RuntimeError(
+                        f"Completion callback returned status {response.status}"
+                    )
+                return
+        except Exception as callback_error:
+            last_error = callback_error
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+    raise RuntimeError(f"Completion callback failed: {last_error}")
 
 def s3_bucket_name():
     value = os.environ.get("S3_BUCKET_NAME")
@@ -415,18 +461,10 @@ class AIPodcastClipper:
         print(f"Identified moments response: ${response.text}")
         return response.text
 
-    @modal.fastapi_endpoint(method="POST")
-    def process_video(self, request: ProcessVideoRequest, token: HTTPAuthorizationCredentials = Depends(auth_scheme)):
+    @modal.method()
+    def process_video(self, request_data: dict):
+        request = ProcessVideoRequest.model_validate(request_data)
         s3_key = request.s3_key
-
-        if token.credentials != os.environ["AUTH_TOKEN"]:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect bearer token",
-                                headers={"WWW-Authenticate": "Bearer"})
-        if f"/projects/{request.project_id}/source/" not in s3_key:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Source key does not match the project",
-            )
         run_id = str(uuid.uuid4())
         base_dir = pathlib.Path("/tmp") / run_id
         base_dir.mkdir(parents=True, exist_ok=True)
@@ -489,32 +527,71 @@ class AIPodcastClipper:
                 )
 
             report_progress(request, "FINALIZING", 95, len(successful_keys), selected_count)
-            return {
+            result = {
                 "requested_clip_count": request.requested_clip_count,
                 "candidates_found": len(moments) if isinstance(moments, list) else 0,
                 "valid_candidate_count": selected_count,
                 "successful_keys": successful_keys,
                 "failed_clip_count": failed_clip_count,
+                "error_code": None,
+                "error_message": None,
             }
+            report_completion(request, result)
+            return result
+        except Exception as processing_error:
+            print(f"Processing job {request.job_id} failed: {processing_error}")
+            report_completion(request, {
+                "requested_clip_count": request.requested_clip_count,
+                "candidates_found": 0,
+                "valid_candidate_count": 0,
+                "successful_keys": [],
+                "failed_clip_count": request.requested_clip_count,
+                "error_code": "PROCESSING_FAILED",
+                "error_message": "SnapPod could not finish this video.",
+            })
+            raise
         finally:
             if base_dir.exists():
                 print(f"Cleaning up temp dir after {base_dir}")
                 shutil.rmtree(base_dir, ignore_errors=True)
 
 
+@app.function(
+    timeout=60,
+    secrets=[modal.Secret.from_name('ai-podcast-clipper-secret')],
+)
+@modal.fastapi_endpoint(method="POST")
+def enqueue_video(
+    request: ProcessVideoRequest,
+    token: HTTPAuthorizationCredentials = Depends(auth_scheme),
+):
+    authorize_request(token)
+    if f"/projects/{request.project_id}/source/" not in request.s3_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Source key does not match the project",
+        )
+
+    function_call = AIPodcastClipper().process_video.spawn(request.model_dump())
+    return {
+        "accepted": True,
+        "external_job_id": function_call.object_id,
+    }
+
+
 @app.local_entrypoint()
 def main():
     import requests
 
-    ai_podcast_clipper = AIPodcastClipper()
-
-    url = ai_podcast_clipper.process_video.web_url
+    url = enqueue_video.web_url
 
     payload = {
         "s3_key": "users/test/projects/test/source/original.mp4",
         "project_id": "test",
+        "job_id": "test-job",
         "processing_version": 1,
         "progress_callback_url": "http://localhost:3000/api/processing-progress",
+        "completion_callback_url": "http://localhost:3000/api/processing-completion",
         "requested_clip_count": 3,
     }
 
